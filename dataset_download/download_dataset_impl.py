@@ -50,6 +50,8 @@ def download_dataset(
     clear_archives_after_unpacking: bool = False,
     skip_downloaded_archives: bool = True,
     crash_on_checksum_mismatch: bool = False,
+    use_huggingface: bool = False,
+    huggingface_repo: str = "facebook/uco3d",
 ):
     """
     Downloads and unpacks the dataset in UCO3D format.
@@ -175,9 +177,15 @@ def download_dataset(
     def _add_to_data_links(data_links, link_data):
         # copy the link data and replace the filename with the actual link
         link_data_with_link = copy.deepcopy(link_data)
-        link_data_with_link["download_url"] = links[link_data["filename"]][
-            "download_url"
-        ]
+        if use_huggingface:
+            # Construct HuggingFace URL
+            filename = link_data["filename"]
+            link_data_with_link["download_url"] = f"https://huggingface.co/datasets/{huggingface_repo}/resolve/main/{filename}"
+        else:
+            # Use the original URL from the links file
+            link_data_with_link["download_url"] = links[link_data["filename"]][
+                "download_url"
+            ]
         data_links.append(link_data_with_link)
 
     # determine links to files we want to download
@@ -317,25 +325,34 @@ def _download_file(
     local_fl = os.path.join(in_progress_folder, link_name)
 
     print(f"Downloading dataset file {link_name} ({url}) to {local_fl}.")
-    _download_with_progress_bar(url, local_fl, link_name)
-    if checksum_check:
-        print(f"Checking SHA256 for {local_fl}.")
-        sha256_local = _sha256_file(local_fl)
-        if sha256_local != sha256:
-            msg = (
-                f"Checksums for {local_fl} did not match!"
-                + " This is likely due to a network failure,"
-                + " please restart the download script."
-                + f" Expected: {sha256}, got: {sha256_local}."
-            )
-            if crash_on_checksum_mismatch:
-                raise ValueError(msg)
-            else:
-                warnings.warn(msg)
-            return link_name, False
+    try:
 
-    os.rename(local_fl, local_fl_final)
-    return link_name, True
+        print(f"Downloading dataset file {link_name} ({url}) to {local_fl}.")
+        _download_with_progress_bar(url, local_fl, link_name)
+        if checksum_check:
+            print(f"Checking SHA256 for {local_fl}.")
+            sha256_local = _sha256_file(local_fl)
+            if sha256_local != sha256:
+                msg = (
+                    f"Checksums for {local_fl} did not match!"
+                    + " This is likely due to a network failure,"
+                    + " please restart the download script."
+                    + f" Expected: {sha256}, got: {sha256_local}."
+                )
+                if crash_on_checksum_mismatch:
+                    raise ValueError(msg)
+                else:
+                    warnings.warn(msg)
+                return link_name, False
+
+        os.rename(local_fl, local_fl_final)
+        return link_name, True
+    except Exception as e:
+        print(f"Error downloading {link_name} from {url}: {e}")
+        # If the file was partially downloaded, remove it
+        if os.path.exists(local_fl):
+            os.remove(local_fl)
+        return link_name, False
 
 
 def _download_with_progress_bar(url: str, fname: str, filename: str, quiet: bool = False):
@@ -345,21 +362,36 @@ def _download_with_progress_bar(url: str, fname: str, filename: str, quiet: bool
         print(f"Local copy {url} -> {fname}")
         shutil.copy(url, fname)
         return
-    resp = requests.get(url, stream=True)
-    print(url)
-    total = int(resp.headers.get("content-length", 0))
-    with open(fname, "wb") as file, tqdm(
-        desc=fname,
-        total=total,
-        unit="iB",
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as bar:
-        for datai, data in enumerate(resp.iter_content(chunk_size=1024)):
-            size = file.write(data)
-            bar.update(size)
-            if (not quiet) and (datai % max((max(total // 1024, 1) // 20), 1) == 0):
-                print(
-                    f"{filename}: Downloaded {100.0*(float(bar.n)/max(total, 1)):3.1f}%."
-                )
-                print(bar)
+    try:
+        resp = requests.get(url, stream=True)
+        resp.raise_for_status()  # Raise an exception for HTTP errors
+        
+        print(f"Downloading from: {url}")
+        total = int(resp.headers.get("content-length", 0))
+        with open(fname, "wb") as file, tqdm(
+            desc=fname,
+            total=total,
+            unit="iB",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as bar:
+            for datai, data in enumerate(resp.iter_content(chunk_size=1024)):
+                size = file.write(data)
+                bar.update(size)
+                if (not quiet) and (datai % max((max(total // 1024, 1) // 20), 1) == 0):
+                    print(
+                        f"{filename}: Downloaded {100.0*(float(bar.n)/max(total, 1)):3.1f}%."
+                    )
+                    print(bar)
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP Error occurred while downloading {filename}: {e}")
+        raise
+    except requests.exceptions.ConnectionError as e:
+        print(f"Connection Error occurred while downloading {filename}: {e}")
+        raise
+    except requests.exceptions.Timeout as e:
+        print(f"Timeout Error occurred while downloading {filename}: {e}")
+        raise
+    except requests.exceptions.RequestException as e:
+        print(f"Error occurred while downloading {filename}: {e}")
+        raise
