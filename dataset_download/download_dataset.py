@@ -10,7 +10,7 @@ import os
 from argparse import ArgumentParser
 from download_dataset_impl import download_dataset
 
-
+DEFAULT_HF_REPO = "facebook/uco3d"
 DEFAULT_LINK_LIST_FILE = "https://raw.githubusercontent.com/uco3d/uco3d.github.io/refs/heads/main/links/uco3d_dataset_download_urls.json"
 DEFAULT_CATEGORY_TO_ARCHIVES_FILE = os.path.join(
     os.path.dirname(__file__),
@@ -105,7 +105,12 @@ def build_arg_parser(
         default=False,
         help="Redownload the already-downloaded archives.",
     )
-
+    parser.add_argument(
+        "--use_huggingface",
+        action="store_true",
+        default=False,
+        help="Download the dataset from HuggingFace instead of the default URLs.",
+    )
     return parser
 
 
@@ -128,4 +133,6 @@ if __name__ == "__main__":
         checksum_check=bool(args.checksum_check),
         clear_archives_after_unpacking=bool(args.clear_archives_after_unpacking),
         skip_downloaded_archives=not bool(args.redownload_existing_archives),
+        use_huggingface=bool(args.use_huggingface),
+        huggingface_repo=DEFAULT_HF_REPO,
     )
